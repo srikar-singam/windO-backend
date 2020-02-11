@@ -9,6 +9,7 @@ import keycloakutils
 from urllib.parse import urlparse
 from flask import request, jsonify, make_response, g, redirect
 from flask_oidc import OpenIDConnect
+from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -37,6 +38,7 @@ def api_version():
     except Exception as e:
         logger.error("Current API details fetch error: " + str(e))
         return jsonify({"status": False, "msg": str(e)}), 500
+
 
 # *************************** VERSION ************************** #
 
@@ -109,6 +111,7 @@ def current_user_details():
     except Exception as e:
         logger.error("Current user details fetch error: " + str(e))
         return jsonify({"status": False, "msg": str(e)}), 500
+
 
 # *********************** AUTHENTICATION *********************** #
 
@@ -214,7 +217,8 @@ def edit_user():
             logger.error("User is not authorized to perform the operation")
             return jsonify({"status": False, "msg": "You are not authorized to perform the operation"}), 401
 
-        edit_users_output = keycloak.edit_user(str(request.headers['Authorization']).lstrip("Bearer"), user_id, json_data)
+        edit_users_output = keycloak.edit_user(str(request.headers['Authorization']).lstrip("Bearer"), user_id,
+                                               json_data)
         if edit_users_output['status']:
             logger.info("User edited with user_id: " + str(edit_users_output['response']['user_id']))
             return jsonify({"status": True, "user": {"id": str(edit_users_output['response']['user_id'])}}), 200
@@ -257,7 +261,7 @@ def reset_password():
         return jsonify({"status": False, "msg": "Internal server error"}), 500
 
 
-# DONE
+# VERIFIED
 @app.route('/user', methods=['DELETE'])
 @oidc.accept_token(require_token=True, render_errors=False)
 def delete_user():
@@ -285,10 +289,288 @@ def delete_user():
         logger.error("User delete error: " + str(e))
         return jsonify({"status": False, "msg": "Internal server error"}), 500
 
+
 # **************************** USER **************************** #
 
 
-@app.route('/api')
+# **************************** CUSTOMER **************************** #
+
+# DONE
+@app.route('/customers', methods=['GET'])
 @oidc.accept_token(require_token=True, render_errors=False)
-def hello_api():
-    return json.dumps({'msg': 'Welcome %s' % g.oidc_token_info['user_first_name']})
+def all_customers_details():
+    logger.info("Fetching list of all customers by: " + str(g.oidc_token_info['user_id']))
+
+    try:
+        current_user_roles = [grp.lstrip('/') for grp in g.oidc_token_info['user_group']]
+        if "admin" not in current_user_roles:
+            logger.error("User is not allowed to perform the operation")
+            return jsonify({"status": False, "msg": "You are not allowed to perform the operation"}), 401
+
+        user = mongo.db.customersCollection
+        all_user = []
+
+        for u in user.find().sort("first_name"):
+            tmp = u
+            tmp["id"] = tmp["_id"]
+            del tmp["_id"]
+            del tmp["password"]
+            all_user.append(dict(tmp))
+
+        logger.info("All Customer details fetched")
+        return jsonify({"status": True, 'customers': all_user}), 200
+    except Exception as e:
+        logger.error("All user fetch error: " + str(e))
+        return jsonify({"status": False, "msg": "Internal server error"}), 500
+
+
+# DONE
+@app.route('/customer', methods=['GET'])
+@oidc.accept_token(require_token=True, render_errors=False)
+def customer_details():
+    logger.info("Fetching customer details by: " + str(g.oidc_token_info['user_id']))
+
+    try:
+        customer_id = request.args.get("customer_id")
+        if customer_id is None:
+            return jsonify({"status": False, "msg": "'customer_id' not found in query."}), 404
+
+        current_user_roles = [grp.lstrip('/') for grp in g.oidc_token_info['user_group']]
+        if not any(s in current_user_roles for s in ["admin", "manager"]) and g.oidc_token_info['user_id'] != customer_id:
+            # if current_customer["role"] not in ["admin"]:
+            #    if customer_id != current_customer["id"]:
+            logger.error("customer is not authorized to perform the operation")
+            return jsonify({"status": False, "msg": "You are not authorized to perform the operation"}), 401
+
+        customer = mongo.db.customersCollection
+        output = customer.find_one({"_id": str(customer_id).strip()})
+
+        if output is None:
+            logger.error("customer not found with id: " + str(customer_id))
+            return jsonify({"status": False, "msg": "customer not found with specified ID"}), 401
+
+        output['id'] = str(output['_id'])
+        del output["user_id"]
+        del output["_id"]
+
+        logger.info("customer details fetched with customer_id: " + str(customer_id))
+        return jsonify({"status": True, "customer": output}), 200
+
+    except Exception as e:
+        logger.info("customer details fetch error: " + str(e))
+        return jsonify({"status": False, "msg": "Internal server error"}), 500
+
+
+# DONE
+@app.route('/customer', methods=['POST'])
+@oidc.accept_token(require_token=True, render_errors=False)
+def add_customer():
+    logger.info("Adding new customer details by: " + str(g.oidc_token_info['user_id']))
+
+    try:
+        json_data = json.dumps(request.get_json())
+
+        if not all(s in json_data for s in ["first_name", "last_name", "username", "phone", "password"]):
+            return jsonify({"status": False, "msg": "'first_name', 'last_name', 'username', 'phone'"
+                                                    " and/or 'password' not found in query."}), 404
+
+        current_user_roles = [grp.lstrip('/') for grp in g.oidc_token_info['user_group']]
+        if not any(s in current_user_roles for s in ["admin", "manager"]):
+            # if current_customer["role"] not in ["admin"]:
+            #    if customer_id != current_customer["id"]:
+            logger.error("customer is not authorized to perform the operation")
+            return jsonify({"status": False, "msg": "You are not authorized to perform the operation"}), 401
+
+        row_count = customer.find({"first_name": str(json_data["first_name"]).strip()}).count()
+        if int(row_count) > 0:
+            logger.error("first name already exists")
+            return jsonify({"status": False, "msg": "first name already exists"}), 409
+
+        row_count = customer.find({"username": str(json_data["username"]).strip()}).count()
+        if int(row_count) > 0:
+            logger.error("username already exists")
+            return jsonify({"status": False, "msg": "username already exists"}), 409
+
+        row_count = customer.find({"phone": str(json_data["phone"]).strip()}).count()
+        if int(row_count) > 0:
+            logger.error("Mobile number already exists")
+            return jsonify({"status": False, "msg": "Mobile number already exists"}), 409
+
+        if "email" in json_data.keys():
+            row_count = customer.find({"email": str(json_data["email"]).strip()}).count()
+            if int(row_count) > 0:
+                logger.error("Email already exists")
+                return jsonify({"status": False, "msg": "Email already exists"}), 409
+
+        if len(json_data["password"]) < 6 or len(json_data["password"]) > 32:
+            logger.error("Password length is not in range(Min 6 char required and Max 32 char)")
+            return jsonify({"status": False, "msg": "Password length is not in range(Min 6 char required and Max 32 "
+                                                    "char)"}), 400
+
+        json_data["password"] = generate_password_hash(json_data['password'], method='sha256')
+
+        json_data["_id"] = str(uuid.uuid4())
+        json_data["roles"] = ["customer"]
+        add_users_output = keycloak.add_user(str(request.headers['Authorization']).lstrip("Bearer"), json_data)
+        if add_users_output['status']:
+            logger.info("Customer added with customer_id: " + str(add_users_output['response']['user_id']))
+            # json_data["user_id"] = str(add_users_output['response']['user_id'])
+            del json_data["password"]
+            customer = mongo.db.customersCollection
+            customer_id = customer.insert_one(json_data)
+            logger.info("customer added with customer_id: " + str(customer_id))
+            # return jsonify({"status": True, "user": {"id": str(add_users_output['response']['user_id'])}}), 200
+            return jsonify({"status": True, "customer": {"id": customer_id["_id"]}}), 200
+        else:
+            logger.error("User add error: " + add_users_output['msg'])
+            return jsonify({"status": False, "msg": add_users_output['msg']}), int(add_users_output['error_code'])
+
+    except Exception as e:
+        logger.error("customer add error: " + str(e))
+        return jsonify({"status": False, "msg": "Internal server error"}), 500
+
+
+# DONE
+@app.route('/customer', methods=['PUT'])
+@oidc.accept_token(require_token=True, render_errors=False)
+def edit_customer():
+    logger.info("Updating customer details by: " + str(g.oidc_token_info['user_id']))
+
+    try:
+        json_data = request.get_json()
+        customer = mongo.db.customerCollection
+
+        customer_id = request.args.get("customer_id")
+        if customer_id is None:
+            return jsonify({"status": False, "msg": "'customer_id' not found in query."}), 404
+
+        current_user_roles = [grp.lstrip('/') for grp in g.oidc_token_info['user_group']]
+        if not any(s in current_user_roles for s in ["admin"]) and g.oidc_token_info['user_id'] != customer_id:
+            # if current_customer["role"] not in ["admin"]:
+            #    if customer_id != current_customer["id"]:
+            logger.error("customer is not authorized to perform the operation")
+            return jsonify({"status": False, "msg": "You are not authorized to perform the operation"}), 401
+
+        data_keys = json_data.keys()
+
+        this_customer = customer.find_one({"_id": str(customer_id).strip()})
+        if this_customer is None:
+            logger.error("No customer found with the id for edit customer")
+            return jsonify({"status": False, "msg": "No customer found with the id for edit customer"}), 404
+
+        if "customername" in data_keys:
+            if json_data["customername"] != this_customer["customername"]:
+                row_count = customer.find({"customername": str(json_data["customername"]).strip()}).count()
+                if int(row_count) > 0:
+                    logger.error("customername already exists")
+                    return jsonify({"status": False, "msg": "customername already exists"}), 409
+
+        if "phone" in data_keys:
+            if json_data["phone"] != this_customer["phone"]:
+                row_count = customer.find({"phone": str(json_data["phone"]).strip()}).count()
+                if int(row_count) > 0 and str(json_data["phone"]) != str(this_customer["phone"]):
+                    logger.error("Mobile number already exists")
+                    return jsonify({"status": False, "msg": "Mobile number already exists"}), 409
+
+        if "email" in data_keys:
+            if json_data["email"] != this_customer["email"]:
+                row_count = customer.find({"email": str(json_data["email"]).strip()}).count()
+                if int(row_count) > 0 and str(json_data["email"]) != str(this_customer["email"]):
+                    logger.error("Email already exists")
+                    return jsonify({"status": False, "msg": "Email already exists"}), 409
+
+        if "password" in data_keys:
+            logger.warning("Found password in customer update data. Removing password")
+            del json_data["password"]
+
+        if "id" in data_keys:
+            logger.warning("Found ID in customer update data. Removing ID")
+            del json_data["id"]
+
+        output = customer.update_one({"_id": str(customer_id).strip()}, {"$set": dict(json_data)})
+        if output.matched_count < 1:
+            logger.error("No customer found with the id for edit customer")
+            return jsonify({"status": False, "msg": "No customer found with the id for edit customer"}), 404
+
+        logger.info("customer details update with customer_id: " + str(customer_id))
+        return jsonify({"status": True, "customer": {"id": customer_id}}), 200
+    except Exception as e:
+        logger.error("customer details update error: " + str(e))
+        return jsonify({"status": False, "msg": "Internal server error"}), 500
+
+
+# DONE
+@app.route('/changePassword', methods=['PUT'])
+@oidc.accept_token(require_token=True, render_errors=False)
+def change_password():
+    logger.info("Changing Password for customer by: " + str(g.oidc_token_info['user_id']))
+
+    try:
+        json_data = request.get_json()
+        customer = mongo.db.customerCollection
+
+        customer_id = request.args.get("customer_id")
+        if customer_id is None:
+            return jsonify({"status": False, "msg": "'customer_id' not found in query."}), 404
+
+        current_user_roles = [grp.lstrip('/') for grp in g.oidc_token_info['user_group']]
+        if not any(s in current_user_roles for s in ["admin", "manager"]) and g.oidc_token_info['user_id'] != customer_id:
+            logger.error("customer is not authorized to perform the operation")
+            return jsonify({"status": False, "msg": "You are not authorized to perform the operation"}), 401
+
+        if len(json_data["password"]) < 6:
+            logger.error("Password is too short(Min 6 char required)")
+            return jsonify({"status": False, "msg": "Password is too short(Min 6 char required)"}), 400
+        elif len(json_data["password"]) > 32:
+            logger.error("Password can't be more than 32 char")
+            return jsonify({"status": False, "msg": "Password can't be more than 32 char"}), 400
+
+        json_data["password"] = generate_password_hash(json_data['password'], method='sha256')
+
+        output = customer.update_one({"_id": str(customer_id).strip()}, {"$set": {"password": json_data["password"]}})
+
+        if output.matched_count < 1:
+            logger.error("No customer found with the id for change password")
+            return jsonify({"status": False, "msg": "No customer found with the id for change password"}), 404
+
+        logger.info("Password updated for customer with customer_id: " + str(customer_id))
+        return jsonify({"status": True, "customer": {"id": str(customer_id).strip()}}), 200
+    except Exception as e:
+        logger.error("Password update error: " + str(e))
+        return jsonify({"status": False, "msg": "Internal server error"}), 500
+
+
+# DONE
+@app.route('/customer', methods=['DELETE'])
+@oidc.accept_token(require_token=True, render_errors=False)
+def delete_customer():
+    logger.info("Deleting customer details by: " + str(g.oidc_token_info['user_id']))
+
+    try:
+        customer = mongo.db.customerCollection
+
+        customer_id = request.args.get("customer_id")
+        if customer_id is None:
+            return jsonify({"status": False, "msg": "'customer_id' not found in query."}), 404
+
+        current_user_roles = [grp.lstrip('/') for grp in g.oidc_token_info['user_group']]
+        if not any(s in current_user_roles for s in ["admin"]):
+            logger.error("User is not authorized to perform the operation")
+            return jsonify({"status": False, "msg": "You are not authorized to perform the operation"}), 401
+
+        if str(customer_id).strip() == g.oidc_token_info['user_id']:
+            logger.error("customer can't delete current logged in customer")
+            return jsonify({"status": False, "msg": "You can't delete current logged in customer"}), 400
+
+        output = customer.delete_one({"_id": str(customer_id).strip()})
+        if output.deleted_count < 1:
+            logger.error("No customer found with the id for delete customer")
+            return jsonify({"status": False, "msg": "No customer found with the id for delete customer"}), 400
+
+        logger.info("customer deleted with customer_id: " + str(customer_id))
+        return jsonify({"status": True, "customer": {"id": customer_id}}), 200
+    except Exception as e:
+        logger.error("customer delete error: " + str(e))
+        return jsonify({"status": False, "msg": "Internal server error"}), 500
+
+# **************************** CUSTOMER **************************** #
