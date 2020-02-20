@@ -28,7 +28,7 @@ client_secret_json = {
     }
 }
 
-with open('/home/rudra/PycharmProjects/python3-keycloak-template/client_secrets.json', 'w') as f:
+with open('client_secrets.json', 'w') as f:
     json.dump(client_secret_json, f)
 
 app.config.update({
