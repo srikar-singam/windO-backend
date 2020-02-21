@@ -428,7 +428,7 @@ def add_customer():
         return jsonify({"status": False, "msg": "Internal server error"}), 500
 
 
-# DONE
+# TESTED
 @app.route('/customer', methods=['PUT'])
 @oidc.accept_token(require_token=True, render_errors=False)
 def edit_customer():
@@ -436,7 +436,7 @@ def edit_customer():
 
     try:
         json_data = request.get_json()
-        customer = mongo.db.customerCollection
+        customer = mongo.db.customersCollection
 
         customer_id = request.args.get("customer_id")
         if customer_id is None:
@@ -454,24 +454,24 @@ def edit_customer():
             logger.error("No customer found with the id for edit customer")
             return jsonify({"status": False, "msg": "No customer found with the id for edit customer"}), 404
 
-        if "customername" in data_keys:
-            if json_data["customername"] != this_customer["customername"]:
-                row_count = customer.find({"customername": str(json_data["customername"]).strip()}).count()
+        if "first_name" in data_keys:
+            if json_data["first_name"] != this_customer["first_name"]:
+                row_count = customer.find({"first_name": str(json_data["first_name"]).strip()}).count()
                 if int(row_count) > 0:
-                    logger.error("customername already exists")
-                    return jsonify({"status": False, "msg": "customername already exists"}), 409
+                    logger.error("first_name already exists")
+                    return jsonify({"status": False, "msg": "first_name already exists"}), 409
 
         if "phone" in data_keys:
             if json_data["phone"] != this_customer["phone"]:
                 row_count = customer.find({"phone": str(json_data["phone"]).strip()}).count()
-                if int(row_count) > 0 and str(json_data["phone"]) != str(this_customer["phone"]):
+                if int(row_count) > 0:
                     logger.error("Mobile number already exists")
                     return jsonify({"status": False, "msg": "Mobile number already exists"}), 409
 
         if "email" in data_keys:
             if json_data["email"] != this_customer["email"]:
                 row_count = customer.find({"email": str(json_data["email"]).strip()}).count()
-                if int(row_count) > 0 and str(json_data["email"]) != str(this_customer["email"]):
+                if int(row_count) > 0:
                     logger.error("Email already exists")
                     return jsonify({"status": False, "msg": "Email already exists"}), 409
 
@@ -483,10 +483,11 @@ def edit_customer():
             logger.warning("Found ID in customer update data. Removing ID")
             del json_data["id"]
 
-        output = customer.update_one({"_id": str(customer_id).strip()}, {"$set": dict(json_data)})
-        if output.matched_count < 1:
-            logger.error("No customer found with the id for edit customer")
-            return jsonify({"status": False, "msg": "No customer found with the id for edit customer"}), 404
+        # output = \
+        customer.update_one({"_id": str(customer_id).strip()}, {"$set": dict(json_data)})
+        # if output.matched_count < 1:
+        #    logger.error("No customer found with the id for edit customer")
+        #    return jsonify({"status": False, "msg": "No customer found with the id for edit customer"}), 404
 
         logger.info("customer details update with customer_id: " + str(customer_id))
         return jsonify({"status": True, "customer": {"id": customer_id}}), 200
@@ -495,7 +496,7 @@ def edit_customer():
         return jsonify({"status": False, "msg": "Internal server error"}), 500
 
 
-# DONE
+# TESTED
 @app.route('/changePassword', methods=['PUT'])
 @oidc.accept_token(require_token=True, render_errors=False)
 def change_password():
@@ -503,14 +504,14 @@ def change_password():
 
     try:
         json_data = request.get_json()
-        customer = mongo.db.customerCollection
+        customer = mongo.db.customersCollection
 
         customer_id = request.args.get("customer_id")
         if customer_id is None:
             return jsonify({"status": False, "msg": "'customer_id' not found in query."}), 404
 
         current_user_roles = [grp.lstrip('/') for grp in g.oidc_token_info['user_group']]
-        if not any(s in current_user_roles for s in ["admin", "manager"]) and g.oidc_token_info['user_id'] != customer_id:
+        if not any(s in current_user_roles for s in ["admin"]) and g.oidc_token_info['user_id'] != customer_id:
             logger.error("customer is not authorized to perform the operation")
             return jsonify({"status": False, "msg": "You are not authorized to perform the operation"}), 401
 
@@ -536,14 +537,14 @@ def change_password():
         return jsonify({"status": False, "msg": "Internal server error"}), 500
 
 
-# DONE
+# TESTED
 @app.route('/customer', methods=['DELETE'])
 @oidc.accept_token(require_token=True, render_errors=False)
 def delete_customer():
     logger.info("Deleting customer details by: " + str(g.oidc_token_info['user_id']))
 
     try:
-        customer = mongo.db.customerCollection
+        customer = mongo.db.customersCollection
 
         customer_id = request.args.get("customer_id")
         if customer_id is None:
